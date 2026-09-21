@@ -113,3 +113,25 @@ impl<'a, Vfs: WriteSupportingVfsAsync + ?Sized + 'a> WriteToAsync<'a, Vfs> for (
         future::ready(Ok(()))
     }
 }
+
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+impl<'a, Vfs: WriteSupportingVfsAsync + ?Sized + 'a> WriteToAsyncRef<'a, Vfs> for () {
+    type Future<'b>
+        = future::Ready<VfsResult<(), Vfs>>
+    where
+        Self: 'b,
+        'a: 'b,
+        Vfs: 'b;
+
+    fn write_to_async_ref<'b>(
+        &'b self,
+        _path: <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
+        _vfs: Pin<&'b Vfs>,
+    ) -> Self::Future<'b>
+    where
+        'a: 'b,
+    {
+        future::ready(Ok(()))
+    }
+}

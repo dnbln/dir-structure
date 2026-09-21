@@ -121,6 +121,28 @@ async fn deferred_read_or_own_write_to_async_ref() {
     assert_eq!(fs::read_to_string(d.join("out2.txt")).unwrap(), "f2");
 }
 
+/// `()` writes as a no-op through `WriteToAsyncRef`, so `DirChildren<(), _>` can be
+/// used as a placeholder entry type that satisfies the write bound without real data.
+#[tokio::test]
+async fn unit_write_to_async_ref_is_no_op() {
+    use dir_structure::traits::vfs::VfsCore;
+    use dir_structure_tools::NoFilter;
+
+    let vfs = TokioFsVfs;
+
+    let p = test_dir("unit_write_to_async_ref_is_no_op");
+    ().write_to_async_ref(p.join("noop.txt"), Pin::new(&vfs))
+        .await
+        .unwrap();
+    assert!(!p.join("noop.txt").exists());
+
+    let skeleton: DirChildren<(), NoFilter, <TokioFsVfs as VfsCore>::Path> = DirChildren::default();
+    skeleton
+        .write_to_async_ref(p.join("dir"), Pin::new(&vfs))
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn read_all_directory_files() {
     #[derive(dir_structure::DirStructureAsync)]
