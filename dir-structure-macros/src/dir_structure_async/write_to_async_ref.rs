@@ -264,7 +264,10 @@ pub(super) fn future_impl_enum(
         quote! {}
     };
 
-    let where_clause_write_future = merge_where_clause(None, write_async_ref.clauses.clone());
+    let where_clause_write_future = merge_where_clause(
+        st.generics.where_clause.clone(),
+        write_async_ref.clauses.clone(),
+    );
 
     let vis = &st.vis;
 

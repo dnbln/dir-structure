@@ -240,7 +240,8 @@ pub(super) fn future_impl_enum(
     let first_ty = &first.actual_field_ty_perform;
     let ty_name = &st.ident;
 
-    let where_clause_read_future = merge_where_clause(None, read_async.clauses.clone());
+    let where_clause_read_future =
+        merge_where_clause(st.generics.where_clause.clone(), read_async.clauses.clone());
 
     let vis = &st.vis;
 
