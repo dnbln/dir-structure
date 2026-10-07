@@ -16,6 +16,8 @@ use std::ops::DerefMut;
 use std::ops::RangeBounds;
 use std::path::Path;
 use std::pin::Pin;
+#[cfg(feature = "async")]
+use std::pin::pin;
 use std::slice;
 #[cfg(feature = "async")]
 use std::task::Context;
@@ -44,7 +46,9 @@ use dir_structure::traits::vfs::PathType;
 #[cfg(feature = "async")]
 use dir_structure::traits::vfs::VfsCore;
 #[cfg(feature = "async")]
-use futures::Stream;
+use futures::StreamExt;
+#[cfg(feature = "async")]
+use futures::future::try_join_all;
 #[cfg(feature = "async")]
 use pin_project::pin_project;
 
@@ -919,154 +923,10 @@ where
 
 #[cfg(feature = "async")]
 #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-#[pin_project(project_replace = DirChildrenReadAsyncFutureProjOwn)]
 #[doc(hidden)]
-pub enum DirChildrenReadAsyncFuture<'a, T, F, Vfs: VfsAsync + 'a>
-where
-    T: ReadFromAsync<'a, Vfs> + 'static,
-    F: Filter<Vfs::Path> + Send + 'static,
-    T::Future: Future<Output = VfsResult<T, Vfs>> + Send + Unpin + 'a,
-{
-    Poison,
-    Init(
-        Pin<Box<Vfs::DirWalkFuture<'a>>>,
-        Vec<DirChild<T, Vfs::Path>>,
-        <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
-        Pin<&'a Vfs>,
-        PhantomData<F>,
-    ),
-    Begin(
-        Pin<Box<Vfs::DirWalk<'a>>>,
-        Vec<DirChild<T, Vfs::Path>>,
-        <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
-        Pin<&'a Vfs>,
-    ),
-    ReadAsync(
-        Pin<Box<Vfs::DirWalk<'a>>>,
-        Vec<DirChild<T, Vfs::Path>>,
-        <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
-        T::Future,
-        <Vfs::Path as PathType>::PathSegmentOwned,
-        Pin<&'a Vfs>,
-    ),
-}
-
-#[cfg(feature = "async")]
-#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-impl<'a, T, F, Vfs: VfsAsync + 'a> Future for DirChildrenReadAsyncFuture<'a, T, F, Vfs>
-where
-    T: ReadFromAsync<'a, Vfs> + Send + 'static,
-    F: Filter<Vfs::Path> + Send + 'static,
-    T::Future: Future<Output = VfsResult<T, Vfs>> + Unpin + 'static,
-{
-    type Output = VfsResult<DirChildren<T, F, Vfs::Path>, Vfs>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().project_replace(Self::Poison);
-
-        match this {
-            DirChildrenReadAsyncFutureProjOwn::Init(mut entries, children, path, vfs, _) => {
-                match entries.as_mut().poll(cx) {
-                    Poll::Ready(Ok(entries)) => {
-                        self.project_replace(DirChildrenReadAsyncFuture::Begin(
-                            Box::pin(entries),
-                            children,
-                            path,
-                            vfs,
-                        ));
-                        cx.waker().wake_by_ref();
-                        Poll::Pending
-                    }
-                    Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-                    Poll::Pending => {
-                        self.project_replace(DirChildrenReadAsyncFuture::Init(
-                            entries,
-                            children,
-                            path,
-                            vfs,
-                            PhantomData::<F>,
-                        ));
-                        Poll::Pending
-                    }
-                }
-            }
-            DirChildrenReadAsyncFutureProjOwn::Begin(mut entries, children, path, vfs) => {
-                use std::task::Poll;
-
-                match entries.as_mut().poll_next(cx) {
-                    Poll::Ready(Some(Ok(DirEntryInfo {
-                        name,
-                        path: path_child,
-                        kind: _,
-                    }))) => {
-                        if !F::allows(path_child.as_ref()) {
-                            self.project_replace(DirChildrenReadAsyncFuture::Begin(
-                                entries, children, path, vfs,
-                            ));
-                            cx.waker().wake_by_ref();
-                            return Poll::Pending;
-                        }
-
-                        let value_future = T::read_from_async(path_child, vfs);
-                        self.project_replace(DirChildrenReadAsyncFuture::ReadAsync(
-                            entries,
-                            children,
-                            path,
-                            value_future,
-                            name,
-                            vfs,
-                        ));
-                        cx.waker().wake_by_ref();
-                        Poll::Pending
-                    }
-                    Poll::Ready(None) => Poll::Ready(Ok(DirChildren {
-                        children,
-                        filter: marker::PhantomData,
-                    })),
-                    Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
-                    Poll::Pending => {
-                        self.project_replace(DirChildrenReadAsyncFuture::Begin(
-                            entries, children, path, vfs,
-                        ));
-                        Poll::Pending
-                    }
-                }
-            }
-            DirChildrenReadAsyncFutureProjOwn::ReadAsync(
-                entries,
-                mut children,
-                path,
-                mut value_fut,
-                file_name,
-                vfs,
-            ) => match Pin::<&mut T::Future>::new(&mut value_fut).poll(cx) {
-                Poll::Ready(Ok(value)) => {
-                    children.push(DirChild { file_name, value });
-                    self.project_replace(DirChildrenReadAsyncFuture::Begin(
-                        entries, children, path, vfs,
-                    ));
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-                Poll::Pending => {
-                    self.project_replace(DirChildrenReadAsyncFuture::ReadAsync(
-                        entries,
-                        children,
-                        path,
-                        value_fut,
-                        file_name.clone(),
-                        vfs,
-                    ));
-                    Poll::Pending
-                }
-            },
-            DirChildrenReadAsyncFutureProjOwn::Poison => {
-                panic!("DirChildrenReadAsyncFuture is poisoned, this should never happen");
-            }
-        }
-    }
-}
+pub type DirChildrenReadAsyncFuture<'a, T, F, Vfs> = Pin<
+    Box<dyn Future<Output = VfsResult<DirChildren<T, F, <Vfs as VfsCore>::Path>, Vfs>> + Send + 'a>,
+>;
 
 #[cfg(feature = "async")]
 #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
@@ -1074,7 +934,7 @@ impl<'a, T, F, Vfs: VfsAsync + 'a> ReadFromAsync<'a, Vfs> for DirChildren<T, F, 
 where
     T: ReadFromAsync<'a, Vfs> + Send + 'static,
     F: Filter<Vfs::Path> + Send + 'static,
-    T::Future: Future<Output = VfsResult<T, Vfs>> + Unpin + 'static,
+    T::Future: Future<Output = VfsResult<T, Vfs>> + Unpin,
 {
     type Future = DirChildrenReadAsyncFuture<'a, T, F, Vfs>;
 
@@ -1082,8 +942,31 @@ where
         path: <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
         vfs: Pin<&'a Vfs>,
     ) -> Self::Future {
-        let f = Box::pin(vfs.walk_dir(path.clone()));
-        DirChildrenReadAsyncFuture::Init(f, Vec::new(), path, vfs, PhantomData::<F>)
+        Box::pin(async move {
+            let mut entries = Vec::new();
+            let dir_walk = vfs.walk_dir(path).await?;
+            let mut dir_walk = pin!(dir_walk);
+            while let Some(entry) = dir_walk.next().await {
+                let DirEntryInfo { name, path, .. } = entry?;
+                if F::allows(path.as_ref()) {
+                    entries.push((name, path));
+                }
+            }
+
+            let children = entries.into_iter().map(|(file_name, path_child)| {
+                let value = T::read_from_async(path_child, vfs);
+                async move {
+                    let value = value.await?;
+                    Ok(DirChild { file_name, value })
+                }
+            });
+            let children = try_join_all(children).await?;
+
+            Ok(DirChildren {
+                children,
+                filter: PhantomData,
+            })
+        })
     }
 }
 
@@ -1111,91 +994,23 @@ where
     F: Filter<Vfs::Path> + Send + 'static,
     T::Future: Future<Output = VfsResult<(), Vfs>> + Unpin + 'a,
 {
-    type Future = DirChildrenWriteAsyncFuture<'a, T, Vfs>;
+    type Future = Pin<Box<dyn Future<Output = VfsResult<(), Vfs>> + Send + 'a>>;
 
     fn write_to_async(
         self,
         path: <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
         vfs: Pin<&'a Vfs>,
     ) -> Self::Future {
-        DirChildrenWriteAsyncFuture::Init(self.into_iter(), path, vfs)
-    }
-}
+        Box::pin(async move {
+            let writes = self.children.into_iter().map(|child| {
+                let path = path.as_ref().join_segment(&child.file_name);
+                async move { child.value.write_to_async(path, vfs).await }
+            });
 
-#[cfg(feature = "async")]
-#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-#[pin_project(project_replace = DirChildrenWriteAsyncFutureProjOwn)]
-#[doc(hidden)]
-pub enum DirChildrenWriteAsyncFuture<'a, T, Vfs: WriteSupportingVfsAsync + 'static>
-where
-    T: WriteToAsync<'a, Vfs>,
-    <T as WriteToAsync<'a, Vfs>>::Future: Future<Output = VfsResult<(), Vfs>> + Unpin,
-{
-    Poison,
-    Init(
-        DirChildrenIntoIter<T, <Vfs as VfsCore>::Path>,
-        <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
-        Pin<&'a Vfs>,
-    ),
-    Write(
-        DirChildrenIntoIter<T, <Vfs as VfsCore>::Path>,
-        <T as WriteToAsync<'a, Vfs>>::Future,
-        <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
-        Pin<&'a Vfs>,
-    ),
-}
+            try_join_all(writes).await?;
 
-#[cfg(feature = "async")]
-#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-impl<'a, T, Vfs: WriteSupportingVfsAsync + 'static> Future
-    for DirChildrenWriteAsyncFuture<'a, T, Vfs>
-where
-    T: WriteToAsync<'a, Vfs>,
-    <T as WriteToAsync<'a, Vfs>>::Future: Future<Output = VfsResult<(), Vfs>> + Unpin,
-{
-    type Output = VfsResult<(), Vfs>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().project_replace(Self::Poison);
-
-        match this {
-            DirChildrenWriteAsyncFutureProjOwn::Init(mut iter, path, vfs) => {
-                if let Some(child) = iter.next() {
-                    let fut = child
-                        .value
-                        .write_to_async(path.as_ref().join_segment(&child.file_name), vfs);
-                    self.project_replace(Self::Write(iter, fut, path.clone(), vfs));
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Ok(()))
-                }
-            }
-            DirChildrenWriteAsyncFutureProjOwn::Write(mut iter, mut fut, path, vfs) => {
-                match Pin::new(&mut fut).poll(cx) {
-                    Poll::Ready(Ok(())) => {
-                        if let Some(child) = iter.next() {
-                            let new_fut = child
-                                .value
-                                .write_to_async(path.as_ref().join_segment(&child.file_name), vfs);
-                            self.project_replace(Self::Write(iter, new_fut, path.clone(), vfs));
-                            cx.waker().wake_by_ref();
-                            Poll::Pending
-                        } else {
-                            Poll::Ready(Ok(()))
-                        }
-                    }
-                    Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-                    Poll::Pending => {
-                        self.project_replace(Self::Write(iter, fut, path.clone(), vfs));
-                        Poll::Pending
-                    }
-                }
-            }
-            DirChildrenWriteAsyncFutureProjOwn::Poison => {
-                panic!("DirChildrenWriteAsyncFuture is poisoned, this should never happen");
-            }
-        }
+            Ok(())
+        })
     }
 }
 
@@ -1210,7 +1025,7 @@ where
         Future<Output = VfsResult<(), Vfs>> + Unpin + 'f,
 {
     type Future<'a>
-        = DirChildrenWriteAsyncRefFuture<'r, 'a, T, Vfs>
+        = Pin<Box<dyn Future<Output = VfsResult<(), Vfs>> + Send + 'a>>
     where
         T: 'a,
         Vfs: 'a,
@@ -1225,87 +1040,17 @@ where
     where
         'r: 'a,
     {
-        DirChildrenWriteAsyncRefFuture::Init(self.iter(), path, vfs)
-    }
-}
+        let children = &self.children;
+        Box::pin(async move {
+            let writes = children.iter().map(|child| {
+                let child_path = path.as_ref().join_segment(&child.file_name);
+                async move { child.value.write_to_async_ref(child_path, vfs).await }
+            });
 
-#[cfg(feature = "async")]
-#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-#[pin_project(project_replace = DirChildrenWriteAsyncRefFutureProjOwn)]
-#[doc(hidden)]
-pub enum DirChildrenWriteAsyncRefFuture<'r, 'f, T, Vfs: WriteSupportingVfsAsync + 'static>
-where
-    T: WriteToAsyncRef<'r, Vfs> + 'r,
-    <T as WriteToAsyncRef<'r, Vfs>>::Future<'f>: Future<Output = VfsResult<(), Vfs>> + Unpin + 'f,
-    'r: 'f,
-{
-    Poison,
-    Init(
-        DirChildrenIter<'f, T, Vfs::Path>,
-        <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
-        Pin<&'f Vfs>,
-    ),
-    Write(
-        DirChildrenIter<'f, T, Vfs::Path>,
-        <T as WriteToAsyncRef<'r, Vfs>>::Future<'f>,
-        <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
-        Pin<&'f Vfs>,
-    ),
-}
+            try_join_all(writes).await?;
 
-#[cfg(feature = "async")]
-#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-impl<'r, 'f, T, Vfs: WriteSupportingVfsAsync + 'static> Future
-    for DirChildrenWriteAsyncRefFuture<'r, 'f, T, Vfs>
-where
-    T: WriteToAsyncRef<'r, Vfs>,
-    <T as WriteToAsyncRef<'r, Vfs>>::Future<'f>: Future<Output = VfsResult<(), Vfs>> + Unpin + 'f,
-    'r: 'f,
-{
-    type Output = VfsResult<(), Vfs>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().project_replace(Self::Poison);
-
-        match this {
-            DirChildrenWriteAsyncRefFutureProjOwn::Init(mut iter, path, vfs) => {
-                if let Some(child) = iter.next() {
-                    let fut = child
-                        .value
-                        .write_to_async_ref(path.as_ref().join_segment(&child.file_name), vfs);
-                    self.project_replace(Self::Write(iter, fut, path.clone(), vfs));
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Ok(()))
-                }
-            }
-            DirChildrenWriteAsyncRefFutureProjOwn::Write(mut iter, mut fut, path, vfs) => {
-                match Pin::new(&mut fut).poll(cx) {
-                    Poll::Ready(Ok(())) => {
-                        if let Some(child) = iter.next() {
-                            let new_fut = child.value.write_to_async_ref(
-                                path.as_ref().join_segment(&child.file_name),
-                                vfs,
-                            );
-                            self.project_replace(Self::Write(iter, new_fut, path.clone(), vfs));
-                            cx.waker().wake_by_ref();
-                            Poll::Pending
-                        } else {
-                            Poll::Ready(Ok(()))
-                        }
-                    }
-                    Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-                    Poll::Pending => {
-                        self.project_replace(Self::Write(iter, fut, path.clone(), vfs));
-                        Poll::Pending
-                    }
-                }
-            }
-            DirChildrenWriteAsyncRefFutureProjOwn::Poison => {
-                panic!("DirChildrenWriteAsyncRefFuture is poisoned, this should never happen");
-            }
-        }
+            Ok(())
+        })
     }
 }
 
@@ -2619,7 +2364,7 @@ where
 #[cfg(feature = "async")]
 #[pin_project]
 #[doc(hidden)]
-pub struct ForceCreateDirChildrenReadAsyncFuture<'a, T, F, Vfs: VfsAsync>
+pub struct ForceCreateDirChildrenReadAsyncFuture<'a, T, F, Vfs: VfsAsync + 'a>
 where
     T: ReadFromAsync<'a, Vfs> + 'static,
     F: Filter<Vfs::Path> + Send + 'static,
@@ -2631,7 +2376,7 @@ where
 
 #[cfg(feature = "async")]
 #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-impl<'a, T, F, Vfs: VfsAsync> Future for ForceCreateDirChildrenReadAsyncFuture<'a, T, F, Vfs>
+impl<'a, T, F, Vfs: VfsAsync + 'a> Future for ForceCreateDirChildrenReadAsyncFuture<'a, T, F, Vfs>
 where
     T: ReadFromAsync<'a, Vfs> + Send + Sync + 'static,
     F: Filter<Vfs::Path> + Send + 'static,
