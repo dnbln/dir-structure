@@ -351,6 +351,32 @@ pub fn expand_dir_structure_async(st: ItemStruct) -> syn::Result<TokenStream> {
                 }
             }
         }
+
+        #[automatically_derived]
+        impl #write_async_impl_generics ::dir_structure::traits::asy::WriteToAsync<'vfs, Vfs> for #name #ty_generics #where_clause_write_to_async_ref {
+            type Future = ::std::pin::Pin<
+                ::std::boxed::Box<
+                    dyn ::std::future::Future<Output = ::dir_structure::error::VfsResult<(), Vfs>>
+                        + ::std::marker::Send
+                        + 'vfs,
+                >,
+            >;
+
+            fn write_to_async(
+                self,
+                #path_param_name: <Vfs::Path as ::dir_structure::traits::vfs::PathType>::OwnedPath,
+                #vfs_param_name: ::std::pin::Pin<&'vfs Vfs>,
+            ) -> Self::Future {
+                ::std::boxed::Box::pin(async move {
+                    <Self as ::dir_structure::traits::asy::WriteToAsyncRef<'vfs, Vfs>>::write_to_async_ref(
+                        &self,
+                        #path_param_name,
+                        #vfs_param_name,
+                    )
+                    .await
+                })
+            }
+        }
     });
 
     Ok(expanded)

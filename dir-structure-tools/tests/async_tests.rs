@@ -143,6 +143,29 @@ async fn unit_write_to_async_ref_is_no_op() {
         .unwrap();
 }
 
+/// A `DirStructureAsync`-derived struct can be serialized from `DeferredReadOrOwn::Own`,
+/// which requires the inner type to implement owned `WriteToAsync`.
+#[tokio::test]
+async fn deferred_read_or_own_with_custom_structure_write_to_async_ref() {
+    use dir_structure_tools::deferred_read_or_own::DeferredReadOrOwn;
+
+    #[derive(dir_structure::DirStructureAsync)]
+    struct Structure {
+        file: String,
+    }
+
+    let p = test_dir("deferred_read_or_own_with_custom_structure_write_to_async_ref");
+    let d = p.join("dir");
+    std::fs::create_dir_all(&d).unwrap();
+
+    let vfs = Pin::new(&TokioFsVfs);
+    let data = DeferredReadOrOwn::<Structure, TokioFsVfs>::Own(Structure {
+        file: "test".to_owned(),
+    });
+    data.write_to_async_ref(d.clone(), vfs).await.unwrap();
+    assert_eq!(std::fs::read_to_string(d.join("file")).unwrap(), "test");
+}
+
 #[tokio::test]
 async fn read_all_directory_files() {
     #[derive(dir_structure::DirStructureAsync)]
