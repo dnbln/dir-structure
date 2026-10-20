@@ -143,6 +143,25 @@ async fn unit_write_to_async_ref_is_no_op() {
         .unwrap();
 }
 
+/// `Option<T>` writes through `WriteToAsyncRef` when `Some`, and is a no-op when `None`.
+#[tokio::test]
+async fn option_write_to_async_ref() {
+    let vfs = TokioFsVfs;
+
+    let p = test_dir("option_write_to_async_ref");
+    Some("some".to_owned())
+        .write_to_async_ref(p.join("some.txt"), Pin::new(&vfs))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(p.join("some.txt")).unwrap(), "some");
+
+    let none: Option<String> = None;
+    none.write_to_async_ref(p.join("none.txt"), Pin::new(&vfs))
+        .await
+        .unwrap();
+    assert!(!p.join("none.txt").exists());
+}
+
 #[tokio::test]
 async fn read_all_directory_files() {
     #[derive(dir_structure::DirStructureAsync)]

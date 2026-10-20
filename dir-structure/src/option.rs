@@ -222,6 +222,72 @@ where
     }
 }
 
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+#[pin_project(project = OptionWriteToAsyncRefFutureProj)]
+#[doc(hidden)]
+pub enum OptionWriteToAsyncRefFuture<'vfs, 'a, T, Vfs>
+where
+    'vfs: 'a,
+    T: WriteToAsyncRef<'vfs, Vfs> + 'a,
+    Vfs: WriteSupportingVfsAsync + 'vfs,
+{
+    HasContents {
+        #[pin]
+        inner: <T as WriteToAsyncRef<'vfs, Vfs>>::Future<'a>,
+    },
+    NoContents,
+}
+
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+impl<'vfs, 'a, T, Vfs> Future for OptionWriteToAsyncRefFuture<'vfs, 'a, T, Vfs>
+where
+    'vfs: 'a,
+    T: WriteToAsyncRef<'vfs, Vfs> + 'a,
+    Vfs: WriteSupportingVfsAsync + 'vfs,
+{
+    type Output = VfsResult<(), Vfs>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        match this {
+            OptionWriteToAsyncRefFutureProj::HasContents { inner } => inner.poll(cx),
+            OptionWriteToAsyncRefFutureProj::NoContents => Poll::Ready(Ok(())),
+        }
+    }
+}
+
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+impl<'vfs, T, Vfs: WriteSupportingVfsAsync + 'vfs> WriteToAsyncRef<'vfs, Vfs> for Option<T>
+where
+    T: WriteToAsyncRef<'vfs, Vfs>,
+{
+    type Future<'a>
+        = OptionWriteToAsyncRefFuture<'vfs, 'a, T, Vfs>
+    where
+        Self: 'a,
+        'vfs: 'a,
+        Vfs: 'a;
+
+    fn write_to_async_ref<'a>(
+        &'a self,
+        path: <Vfs::Path as PathType>::OwnedPath,
+        vfs: Pin<&'a Vfs>,
+    ) -> Self::Future<'a>
+    where
+        'vfs: 'a,
+    {
+        match self {
+            Some(value) => OptionWriteToAsyncRefFuture::HasContents {
+                inner: value.write_to_async_ref(path, vfs),
+            },
+            None => OptionWriteToAsyncRefFuture::NoContents,
+        }
+    }
+}
+
 #[cfg(feature = "resolve-path")]
 #[cfg_attr(docsrs, doc(cfg(feature = "resolve-path")))]
 impl<const NAME: [char; HAS_FIELD_MAX_LEN], T> HasField<NAME> for Option<T>
