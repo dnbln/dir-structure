@@ -396,3 +396,51 @@ fn versioned_doesnt_call_write_if_not_changed() {
     assert_eq!(std::fs::read_to_string(d.join("f1.txt")).unwrap(), "f2");
     assert_eq!(dir.f1.count.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn serde_wrappers_as_plain_fields() {
+    use std::collections::BTreeMap;
+
+    use dir_structure_tools::data_formats::json::Json;
+    use dir_structure_tools::data_formats::json_pretty::JsonPretty;
+    use dir_structure_tools::data_formats::ron::Ron;
+    use dir_structure_tools::data_formats::ron_pretty::RonPretty;
+    use dir_structure_tools::data_formats::toml::Toml;
+    use dir_structure_tools::data_formats::yaml::Yaml;
+
+    const VALUE: &str = "value";
+
+    #[derive(dir_structure::DirStructure)]
+    struct Dir {
+        json: Json<String>,
+        json_pretty: JsonPretty<String>,
+        toml: Toml<BTreeMap<String, String>>,
+        yaml: Yaml<String>,
+        ron: Ron<String>,
+        ron_pretty: RonPretty<String>,
+    }
+
+    let d = test_dir("serde_wrappers_as_plain_fields").join("dir");
+
+    FsVfs
+        .write_typed(
+            &d,
+            &Dir {
+                json: Json(VALUE.to_owned()),
+                json_pretty: JsonPretty(VALUE.to_owned()),
+                toml: Toml(BTreeMap::from([("key".to_owned(), VALUE.to_owned())])),
+                yaml: Yaml(VALUE.to_owned()),
+                ron: Ron(VALUE.to_owned()),
+                ron_pretty: RonPretty(VALUE.to_owned()),
+            },
+        )
+        .unwrap();
+
+    let dir = FsVfs.read_typed::<Dir>(&d).unwrap();
+    assert_eq!(dir.json.0, VALUE);
+    assert_eq!(dir.json_pretty.0, VALUE);
+    assert_eq!(dir.toml.0["key"].as_str(), VALUE);
+    assert_eq!(dir.yaml.0, VALUE);
+    assert_eq!(dir.ron.0, VALUE);
+    assert_eq!(dir.ron_pretty.0, VALUE);
+}

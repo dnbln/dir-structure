@@ -249,6 +249,34 @@ and write them back to disk."##
                 }
             }
 
+            #[cfg(feature = "async")]
+            #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+            impl<'a, T, Vfs: WriteSupportingVfsAsync + 'static> WriteToAsyncRef<'a, Vfs> for $main_ty<T>
+            where
+                T: serde::Serialize + for<'d> serde::Deserialize<'d> + 'static,
+            {
+                type Future<'b>
+                    = Pin<Box<dyn Future<Output = VfsResult<(), Vfs>> + Send + 'b>>
+                where
+                    Self: 'b,
+                    'a: 'b,
+                    Vfs: 'b;
+
+                fn write_to_async_ref<'b>(
+                    &'b self,
+                    path: <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
+                    vfs: Pin<&'b Vfs>,
+                ) -> Self::Future<'b>
+                where
+                    'a: 'b,
+                {
+                    match $to_str_ty(&self.0).to_str() {
+                        Ok(s) => FileString::new(s).write_to_async(path, vfs),
+                        Err(e) => Box::pin(async move { Err(Error::Serde(path, e.into())) }),
+                    }
+                }
+            }
+
             impl<T> NewtypeToInner for $main_ty<T>
             where
                 T: serde::Serialize + for<'d> serde::Deserialize<'d> + 'static,
