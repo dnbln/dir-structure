@@ -5,13 +5,21 @@
 use std::error::Error;
 
 use dir_structure::prelude::*;
+use serde::{Deserialize, Serialize};
 
 mod example_dirs;
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Data {
+    new_key: String,
+    number: u32,
+    array: Vec<u32>,
+}
+
 #[derive(dir_structure::DirStructure)]
 struct Dir {
-    #[dir_structure(path = "data.yaml", with_newtype = dir_structure_tools::data_formats::yaml::Yaml<serde_yaml::Value>)]
-    data: serde_yaml::Value,
+    #[dir_structure(path = "data.yaml", with_newtype = dir_structure_tools::data_formats::yaml::Yaml<Data>)]
+    data: Data,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -21,26 +29,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Read YAML data: {:?}", dir.data);
 
-    let new_data = serde_yaml::Value::Mapping(serde_yaml::Mapping::from_iter([
-        (
-            serde_yaml::Value::String("new_key".to_string()),
-            serde_yaml::Value::String("new_value".to_string()),
-        ),
-        (
-            serde_yaml::Value::String("number".to_string()),
-            serde_yaml::Value::Number(42.into()),
-        ),
-        (
-            serde_yaml::Value::String("array".to_string()),
-            serde_yaml::Value::Sequence(vec![
-                serde_yaml::Value::Number(1.into()),
-                serde_yaml::Value::Number(2.into()),
-                serde_yaml::Value::Number(3.into()),
-            ]),
-        ),
-    ]));
-
-    let new_dir = Dir { data: new_data };
+    let new_dir = Dir {
+        data: Data {
+            new_key: "new_value".to_owned(),
+            number: 42,
+            array: vec![1, 2, 3],
+        },
+    };
 
     new_dir.write(&path)?;
 

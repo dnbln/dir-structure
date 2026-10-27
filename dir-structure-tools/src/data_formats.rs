@@ -432,12 +432,12 @@ data_format_impl!(
     /// thus allowing us to parse and serialize it from / to yaml when we read / write a
     /// directory structure.
     Yaml,
-    |s| serde_yaml::from_str(s),
-    serde_yaml::Error,
+    |s| serde_saphyr::from_str(s),
+    serde_saphyr::Error,
     YamlToStr,
-    |v| serde_yaml::to_string(&v),
-    |v, w| serde_yaml::to_writer(w, v).map_err(ToWriterError::Serde),
-    serde_yaml::Error,
+    |v| serde_saphyr::to_string(&v),
+    |v, w| serde_saphyr::to_io_writer(w, v).map_err(ToWriterError::Serde),
+    serde_saphyr::ser::Error,
     /// [`FromRefForWriter`] implementation for [`Yaml`].
     YamlRefWr,
     ".yaml", r##"r#"

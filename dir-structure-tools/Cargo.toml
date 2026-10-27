@@ -13,7 +13,7 @@ default = ["tools", "_all"]
 async = ["dep:pin-project", "dep:futures", "dir-structure/async"]
 json = ["dep:serde", "dep:serde_json", "data-formats"]
 toml = ["dep:serde", "dep:toml", "data-formats"]
-yaml = ["dep:serde", "dep:serde_yaml", "data-formats"]
+yaml = ["dep:serde", "dep:serde-saphyr", "data-formats"]
 ron = ["dep:serde", "dep:ron", "data-formats"]
 resolve-path = ["dir-structure/resolve-path"]
 assert_eq = ["dep:assert_eq"]
@@ -110,7 +110,10 @@ serde = { version = "1.0", optional = true, default-features = false, features =
 serde_json = { version = "1.0", optional = true, default-features = false, features = [
     "std",
 ] }
-serde_yaml = { version = "0.9", optional = true, default-features = false }
+serde-saphyr = { version = "2", optional = true, default-features = false, features = [
+    "deserialize",
+    "serialize",
+] }
 toml = { version = "0.9", optional = true, default-features = false, features = [
     "display",
     "serde",
